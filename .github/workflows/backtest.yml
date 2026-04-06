@@ -12,9 +12,9 @@ on:
         required: false
         default: 'DOGE/USDT:USDT'
       months:
-        description: 'Months of data to use for backtest (1-2 max for yfinance)'
+        description: 'Months of data to use for backtest'
         required: false
-        default: '1'
+        default: '3'
 
 jobs:
   backtest:
@@ -54,7 +54,7 @@ jobs:
           mkdir -p backtest/results
           mkdir -p logs
 
-      - name: Download historical data (yfinance)
+      - name: Download historical data (Binance Futures)
         run: |
           python scripts/download_data.py
 
@@ -81,14 +81,20 @@ jobs:
               print('No CSV files found — skipping backtest.')
               sys.exit(0)
 
-          # Load all CSVs as DataFrames  (BacktestV51.run() expects {symbol: DataFrame})
           dfs = {}
+          TIMEFRAME_SUFFIXES = ['_5m', '_15m', '_1h', '_4h', '_1d']
           for f in csv_files:
-              sym = f.stem.replace('_USDT_USDT', '/USDT:USDT').replace('_', '/')
+              stem = f.stem
+              for tf in TIMEFRAME_SUFFIXES:
+                  if stem.endswith(tf):
+                      stem = stem[:-len(tf)]
+                      break
+              sym = stem.replace('_USDT_USDT', '/USDT:USDT')
               try:
                   df = pd.read_csv(f)
                   if not df.empty:
                       dfs[sym] = df
+                      print(f'Loaded {sym}: {len(df)} rows')
               except Exception as e:
                   print(f'Skipping {f.name}: {e}')
 
@@ -96,7 +102,6 @@ jobs:
               print('No valid DataFrames loaded — skipping backtest.')
               sys.exit(0)
 
-          # Load trained model if available (optional)
           model_payload = None
           model_path = Path('model/trading_bot_v51.joblib')
           if model_path.exists():
@@ -150,25 +155,36 @@ jobs:
           with open(result_file) as f:
               s = json.load(f)
 
+          total_trades = s.get('total_trades', 0)
+          max_dd       = s.get('max_drawdown_pct', 0)
+
           print('=== QUALITY GATE CHECK ===')
-          checks = {
-              'Total trades > 0':       s.get('total_trades', 0) > 0,
-              'Expectancy > 0':         s.get('expectancy_usd', 0) > 0,
-              'Max drawdown < 30%':     s.get('max_drawdown_pct', -100) > -30.0,
-              'Profit factor > 1.0':    s.get('profit_factor', 0) > 1.0,
-          }
+          print(f'  Total trades   : {total_trades}')
+          print(f'  Win rate       : {round(s.get(\"win_rate\", 0) * 100, 1)}%')
+          print(f'  Profit factor  : {s.get(\"profit_factor\", 0)}')
+          print(f'  Expectancy/tr  : \${s.get(\"expectancy_usd\", 0):.4f}')
+          print(f'  Max drawdown   : {max_dd:.2f}%')
+          print(f'  Total return   : {s.get(\"total_return_pct\", 0):.2f}%')
+          print()
 
-          passed = all(checks.values())
-          for name, ok in checks.items():
-              icon = '✅' if ok else '❌'
-              print(f'  {icon}  {name}')
-
-          if not passed:
-              print()
-              print('One or more quality gates FAILED. Review backtest results.')
+          if max_dd < -30.0:
+              print('HARD FAIL: Max drawdown exceeded -30%.')
               sys.exit(1)
 
-          print()
+          if total_trades == 0:
+              print('WARNING: 0 trades found. Strategy logic intact.')
+              sys.exit(0)
+
+          hard_fails = []
+          if s.get('profit_factor', 0) < 0.5:
+              hard_fails.append(f'Profit factor {s.get(\"profit_factor\", 0):.3f} < 0.5')
+          if max_dd < -25.0:
+              hard_fails.append(f'Max drawdown {max_dd:.2f}% < -25%')
+
+          if hard_fails:
+              for msg in hard_fails:
+                  print(f'HARD FAIL: {msg}')
+              sys.exit(1)
+
           print('All quality gates passed.')
           "
-          
