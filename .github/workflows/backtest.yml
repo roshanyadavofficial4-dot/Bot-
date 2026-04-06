@@ -65,9 +65,11 @@ jobs:
       - name: Run v5.1 Backtest (backtest_v51.py)
         run: |
           python -c "
-          import sys, json, logging
+          import sys, json, logging, os
+          import pandas as pd
+          import joblib
           from pathlib import Path
-          from backtest.backtest_v51 import BacktestEngineV51
+          from backtest.backtest_v51 import BacktestV51
 
           logging.basicConfig(level=logging.INFO,
                               format='%(asctime)s  %(levelname)-8s  %(message)s',
@@ -79,23 +81,36 @@ jobs:
               print('No CSV files found — skipping backtest.')
               sys.exit(0)
 
-          symbol_map = {}
+          # Load all CSVs as DataFrames  (BacktestV51.run() expects {symbol: DataFrame})
+          dfs = {}
           for f in csv_files:
-              # filename format: DOGE_USDT_USDT.csv → DOGE/USDT:USDT
               sym = f.stem.replace('_USDT_USDT', '/USDT:USDT').replace('_', '/')
-              symbol_map[sym] = str(f)
+              try:
+                  df = pd.read_csv(f)
+                  if not df.empty:
+                      dfs[sym] = df
+              except Exception as e:
+                  print(f'Skipping {f.name}: {e}')
+
+          if not dfs:
+              print('No valid DataFrames loaded — skipping backtest.')
+              sys.exit(0)
+
+          # Load trained model if available (optional)
+          model_payload = None
+          model_path = Path('model/trading_bot_v51.joblib')
+          if model_path.exists():
+              try:
+                  model_payload = joblib.load(model_path)
+                  print(f'Model loaded from {model_path}')
+              except Exception as e:
+                  print(f'Model load failed (will use heuristic): {e}')
 
           try:
-              model_path = 'model/trading_bot_v51.joblib'
-              engine = BacktestEngineV51(
-                  symbols=list(symbol_map.keys()),
-                  csv_map=symbol_map,
-                  initial_balance=2.4,
-                  model_path=model_path,
-              )
-              results = engine.run()
+              engine  = BacktestV51(initial_balance=2.4, model_payload=model_payload)
+              results = engine.run(dfs)
           except Exception as e:
-              print(f'BacktestEngineV51 error: {e}')
+              print(f'BacktestV51 error: {e}')
               sys.exit(1)
 
           out_path = Path('backtest/results/backtest_results.json')
