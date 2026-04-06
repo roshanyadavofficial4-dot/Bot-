@@ -1,0 +1,5 @@
+{
+  "name": "Remix: Trading ",
+  "description": "High-frequency trading bot with institutional-grade reliability, featuring partial fill handling, spread filters, rate-limit caching, and ghost position reconciliation.",
+  "requestFramePermissions": []
+}
