@@ -9,8 +9,8 @@ Principle: parameters shift incrementally — never abrupt jumps.
 All adjustments are bounded within safe operating ranges.
 
 Adjustable Parameters:
-  - min_edge_score      (base: 40)
-  - min_win_prob        (base: 0.52)
+  - min_edge_score      (base: 35)
+  - min_win_prob        (base: 0.49)
   - min_adx             (base: 20)
   - min_ofi             (base: 0.08)
   - risk_pct_multiplier (base: 1.0)
@@ -22,17 +22,19 @@ Triggers:
   - Poor performance  → tighten filters
   - Strong performance → allow marginal relaxation (anti-overfit floor)
   - Ranging market    → tighten OR skip entirely
+  - Trade Starvation  → auto-relax after 22 hours without trade
 """
 
 import logging
 from typing import Dict
+from config import TRADE_STARVATION_HOURS   # ← NEW IMPORT for starvation mode
 
 logger = logging.getLogger("AdaptiveParamEngine")
 
 # ── Absolute bounds — parameters never go outside these ─────────────────────
 BOUNDS = {
-    'min_edge_score':      (35, 75),
-    'min_win_prob':        (0.50, 0.70),
+    'min_edge_score':      (32, 75),      # lowered lower bound for micro-cap mode
+    'min_win_prob':        (0.48, 0.70),  # slightly more flexible
     'min_adx':             (18, 35),
     'min_ofi':             (0.05, 0.25),
     'risk_pct_multiplier': (0.25, 1.25),
@@ -41,8 +43,8 @@ BOUNDS = {
 
 # ── Base values (from config.py) ─────────────────────────────────────────────
 DEFAULTS = {
-    'min_edge_score':      40.0,
-    'min_win_prob':        0.52,
+    'min_edge_score':      35.0,      # relaxed from 40.0
+    'min_win_prob':        0.49,      # relaxed from 0.52
     'min_adx':             20.0,
     'min_ofi':             0.08,
     'risk_pct_multiplier': 1.0,
@@ -79,7 +81,7 @@ class AdaptiveParamEngine:
         """
         Returns the current adjusted parameter set.
 
-        market_context: {regime, volatility_level, adx, efficiency_score, ...}
+        market_context: {regime, volatility_level, adx, efficiency_score, hours_since_last_trade, ...}
         perf_summary:   PerformanceTracker.get_summary() output
         """
         adjustments = []
@@ -150,6 +152,18 @@ class AdaptiveParamEngine:
                 'min_edge_score':      +3,
                 'min_win_prob':        +0.02,
                 'risk_pct_multiplier': -0.10,
+            }))
+
+        # ── NEW: Trade Starvation Detection (DeepSeek + our plan) ─────────────
+        hours_since_last = market_context.get('hours_since_last_trade', 0)
+        if hours_since_last > TRADE_STARVATION_HOURS:
+            logger.info(f"AdaptiveParam: 🔥 STARVATION DETECTED ({hours_since_last:.1f}h) → relaxing 18%")
+            adjustments.append(('relax', 'starvation_mode', {
+                'min_edge_score':      -6,
+                'min_win_prob':        -0.04,
+                'min_adx':             -3,
+                'min_ofi':             -0.03,
+                'risk_pct_multiplier': +0.18,
             }))
 
         # ── Apply all adjustments and clamp ──────────────────────────────────
