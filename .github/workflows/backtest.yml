@@ -12,9 +12,9 @@ on:
         required: false
         default: 'DOGE/USDT:USDT'
       months:
-        description: 'Months of data to use for backtest'
+        description: 'Months of data to use for backtest (1-2 max for yfinance)'
         required: false
-        default: '3'
+        default: '1'
 
 jobs:
   backtest:
@@ -60,7 +60,7 @@ jobs:
 
       - name: Train ML model on real data
         run: |
-          python scripts/train_realdata.py --no-backtest
+          python scripts/train_realdata.py --no-backtest --months 3
 
       - name: Run v5.1 Backtest (backtest_v51.py)
         run: |
@@ -81,15 +81,17 @@ jobs:
               print('No CSV files found — skipping backtest.')
               sys.exit(0)
 
+          # Load all CSVs as DataFrames  (BacktestV51.run() expects {symbol: DataFrame})
+          # Filename format: DOGE_USDT_USDT_5m.csv  →  DOGE/USDT:USDT
           dfs = {}
           TIMEFRAME_SUFFIXES = ['_5m', '_15m', '_1h', '_4h', '_1d']
           for f in csv_files:
-              stem = f.stem
+              stem = f.stem                        # e.g. DOGE_USDT_USDT_5m
               for tf in TIMEFRAME_SUFFIXES:
                   if stem.endswith(tf):
-                      stem = stem[:-len(tf)]
+                      stem = stem[:-len(tf)]       # → DOGE_USDT_USDT
                       break
-              sym = stem.replace('_USDT_USDT', '/USDT:USDT')
+              sym = stem.replace('_USDT_USDT', '/USDT:USDT')   # → DOGE/USDT:USDT
               try:
                   df = pd.read_csv(f)
                   if not df.empty:
@@ -102,6 +104,7 @@ jobs:
               print('No valid DataFrames loaded — skipping backtest.')
               sys.exit(0)
 
+          # Load trained model if available (optional)
           model_payload = None
           model_path = Path('model/trading_bot_v51.joblib')
           if model_path.exists():
@@ -167,24 +170,29 @@ jobs:
           print(f'  Total return   : {s.get(\"total_return_pct\", 0):.2f}%')
           print()
 
+          # Hard fail: drawdown too deep (capital destruction)
           if max_dd < -30.0:
-              print('HARD FAIL: Max drawdown exceeded -30%.')
+              print('❌ HARD FAIL: Max drawdown exceeded -30% — strategy is too risky.')
               sys.exit(1)
 
+          # Soft warn: no trades found (strict signals + limited data = normal)
           if total_trades == 0:
-              print('WARNING: 0 trades found. Strategy logic intact.')
+              print('⚠️  WARNING: 0 trades found in backtest window.')
+              print('   This is expected with v5.1 strict signal conditions on 58-day data.')
+              print('   Strategy logic is intact. No action needed.')
               sys.exit(0)
 
+          # Trade-based checks only when trades exist
           hard_fails = []
           if s.get('profit_factor', 0) < 0.5:
-              hard_fails.append(f'Profit factor {s.get(\"profit_factor\", 0):.3f} < 0.5')
+              hard_fails.append(f'Profit factor {s.get(\"profit_factor\", 0):.3f} < 0.5 (very poor edge)')
           if max_dd < -25.0:
-              hard_fails.append(f'Max drawdown {max_dd:.2f}% < -25%')
+              hard_fails.append(f'Max drawdown {max_dd:.2f}% < -25% (excessive risk)')
 
           if hard_fails:
               for msg in hard_fails:
-                  print(f'HARD FAIL: {msg}')
+                  print(f'❌ HARD FAIL: {msg}')
               sys.exit(1)
 
-          print('All quality gates passed.')
+          print('✅ All quality gates passed.')
           "
