@@ -56,6 +56,7 @@ def load_from_raw_csv(file_stem: str, symbol: str) -> pd.DataFrame:
             df['close']     = df_raw['close'].astype(float)
             df['volume']    = df_raw['volume'].astype(float)
         else:
+            df_raw.columns = list(df_raw.columns)
             df_raw.rename(columns={
                 df_raw.columns[0]: 'timestamp',
                 df_raw.columns[1]: 'open',
@@ -72,11 +73,11 @@ def load_from_raw_csv(file_stem: str, symbol: str) -> pd.DataFrame:
         df.sort_values('timestamp', inplace=True)
         df.reset_index(drop=True, inplace=True)
 
-        logger.info(f"  Loaded {len(df):,} rows | {df['timestamp'].iloc[0].strftime('%Y-%m-%d')} → {df['timestamp'].iloc[-1].strftime('%Y-%m-%d')}")
+        logger.info(f"  Loaded {len(df):,} rows from local CSV | {df['timestamp'].iloc[0].strftime('%Y-%m-%d')} → {df['timestamp'].iloc[-1].strftime('%Y-%m-%d')}")
         return df
 
     except Exception as e:
-        logger.error(f"  Failed to read {raw_path}: {e}")
+        logger.error(f"  Failed to read local CSV {raw_path}: {e}")
         return pd.DataFrame()
 
 
@@ -270,10 +271,10 @@ def process_and_save(symbol: str, file_stem: str) -> str:
 def main():
     raw_files = list(RAW_DIR.glob("*.csv"))
     if raw_files:
-        logger.info(f"Local raw CSVs found: {[f.name for f in raw_files]}")
-        logger.info("Offline mode — skipping Binance download.")
+        logger.info(f"Local raw CSVs found in {RAW_DIR}: {[f.name for f in raw_files]}")
+        logger.info("Using offline mode — skipping Binance download.")
     else:
-        logger.info(f"No local CSVs found — will try Binance download.")
+        logger.info(f"No local CSVs in {RAW_DIR} — will try Binance download.")
 
     saved   = {}
     t_total = time.time()
@@ -299,6 +300,13 @@ def main():
             'source':        'local_csv' if raw_files else 'binance_futures_ccxt',
             'downloaded_at': datetime.now(timezone.utc).isoformat(),
         }, f, indent=2)
+
+    if not saved:
+        logger.error(
+            "0 files saved. Check that raw CSVs exist in data/historical/raw/ "
+            "with correct names (e.g. DOGE_USDT_USDT.csv)"
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
