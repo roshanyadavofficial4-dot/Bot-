@@ -44,36 +44,60 @@ def load_from_raw_csv(file_stem: str, symbol: str) -> pd.DataFrame:
 
     logger.info(f"  Local raw CSV found: {raw_path}")
     try:
-        df_raw = pd.read_csv(raw_path, header=None)
+        # ── Detect header row ────────────────────────────────────────────────
+        # Newer Binance CSVs (2024+) include a header: open_time,open,high,...
+        # Older ones are headerless. Detect by checking the first cell.
+        peek       = pd.read_csv(raw_path, header=None, nrows=1)
+        first_cell = str(peek.iloc[0, 0]).strip().lower()
+        has_header = first_cell in (
+            'open_time', 'timestamp', 'time', 'date', 'open time', 'opentime'
+        )
 
-        if df_raw.shape[1] >= 6:
-            df_raw.columns = BINANCE_RAW_COLS[:df_raw.shape[1]]
-            df = pd.DataFrame()
-            df['timestamp'] = pd.to_datetime(df_raw['open_time'], unit='ms', utc=True)
-            df['open']      = df_raw['open'].astype(float)
-            df['high']      = df_raw['high'].astype(float)
-            df['low']       = df_raw['low'].astype(float)
-            df['close']     = df_raw['close'].astype(float)
-            df['volume']    = df_raw['volume'].astype(float)
+        if has_header:
+            df_raw = pd.read_csv(raw_path)
+            df_raw.columns = [c.lower().strip().replace(' ', '_') for c in df_raw.columns]
+            # Find the open_time column (not close_time)
+            ts_col = next(
+                (c for c in df_raw.columns if 'time' in c and 'close' not in c),
+                df_raw.columns[0]
+            )
         else:
-            df_raw.columns = list(df_raw.columns)
-            df_raw.rename(columns={
-                df_raw.columns[0]: 'timestamp',
-                df_raw.columns[1]: 'open',
-                df_raw.columns[2]: 'high',
-                df_raw.columns[3]: 'low',
-                df_raw.columns[4]: 'close',
-                df_raw.columns[5]: 'volume',
-            }, inplace=True)
-            df = df_raw[['timestamp', 'open', 'high', 'low', 'close', 'volume']].copy()
-            df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
+            df_raw = pd.read_csv(raw_path, header=None)
+            df_raw.columns = BINANCE_RAW_COLS[:df_raw.shape[1]]
+            ts_col = 'open_time'
 
+        # ── Parse timestamp safely ───────────────────────────────────────────
+        # Use pd.to_numeric first to avoid string / overflow issues.
+        # Auto-detect unit: 13-digit = ms, 10-digit = seconds.
+        ts_numeric = pd.to_numeric(df_raw[ts_col], errors='coerce')
+        sample     = ts_numeric.dropna().iloc[0] if not ts_numeric.dropna().empty else 0
+        unit       = 'ms' if sample > 1e12 else 's'
+
+        df = pd.DataFrame()
+        df['timestamp'] = pd.to_datetime(ts_numeric, unit=unit, utc=True, errors='coerce')
+        df['open']      = pd.to_numeric(df_raw['open'],   errors='coerce')
+        df['high']      = pd.to_numeric(df_raw['high'],   errors='coerce')
+        df['low']       = pd.to_numeric(df_raw['low'],    errors='coerce')
+        df['close']     = pd.to_numeric(df_raw['close'],  errors='coerce')
+        df['volume']    = pd.to_numeric(df_raw['volume'], errors='coerce')
+
+        # Drop rows that failed to parse
+        df.dropna(subset=['timestamp', 'open', 'close'], inplace=True)
         df['symbol'] = symbol
         df.drop_duplicates(subset=['timestamp'], inplace=True)
         df.sort_values('timestamp', inplace=True)
         df.reset_index(drop=True, inplace=True)
 
-        logger.info(f"  Loaded {len(df):,} rows from local CSV | {df['timestamp'].iloc[0].strftime('%Y-%m-%d')} → {df['timestamp'].iloc[-1].strftime('%Y-%m-%d')}")
+        if df.empty:
+            logger.error(f"  {raw_path.name}: no valid rows after parsing")
+            return pd.DataFrame()
+
+        logger.info(
+            f"  Loaded {len(df):,} rows | "
+            f"{df['timestamp'].iloc[0].strftime('%Y-%m-%d')} → "
+            f"{df['timestamp'].iloc[-1].strftime('%Y-%m-%d')} "
+            f"[unit={unit}, header={has_header}]"
+        )
         return df
 
     except Exception as e:
