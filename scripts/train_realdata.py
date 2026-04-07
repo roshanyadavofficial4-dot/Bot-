@@ -220,40 +220,82 @@ def generate_labels(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_all_data(months: int = 6) -> dict:
-    """Load all CSVs from data/historical/ directory."""
-    manifest_path = DATA_DIR / "manifest.json"
-    if not manifest_path.exists():
+    """
+    Load all processed CSVs from data/historical/ directory.
+    Glob-based: does NOT rely on absolute paths in manifest.json.
+    """
+    # ── Find all processed CSVs directly (robust to path changes) ─────────────
+    csv_files = list(DATA_DIR.glob("*.csv"))
+    csv_files = [f for f in csv_files if f.name != "manifest.json"]
+
+    if not csv_files:
+        # Fallback: check manifest for any valid paths
+        manifest_path = DATA_DIR / "manifest.json"
+        if manifest_path.exists():
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+            # Resolve paths relative to DATA_DIR if absolute path is broken
+            for sym, stored_path in manifest.get('symbols', {}).items():
+                p = Path(stored_path)
+                if not p.exists():
+                    # Try relative resolution: just look for the filename in DATA_DIR
+                    candidate = DATA_DIR / p.name
+                    if candidate.exists():
+                        csv_files.append(candidate)
+                else:
+                    csv_files.append(p)
+
+    if not csv_files:
         logger.error(
-            f"Manifest not found at {manifest_path}\n"
+            f"No CSV files found in {DATA_DIR}\n"
             f"Run 'python scripts/download_data.py' first!"
         )
         sys.exit(1)
 
-    with open(manifest_path) as f:
-        manifest = json.load(f)
+    # ── Stem → symbol mapping (DOGE_USDT_USDT_5m → DOGE/USDT:USDT) ───────────
+    TIMEFRAME_SUFFIXES = ['_5m', '_15m', '_1h', '_4h', '_1d']
 
-    dfs = {}
+    def stem_to_symbol(stem: str) -> str:
+        for tf in TIMEFRAME_SUFFIXES:
+            if stem.endswith(tf):
+                stem = stem[:-len(tf)]
+                break
+        return stem.replace('_USDT_USDT', '/USDT:USDT')
+
+    dfs    = {}
     cutoff = pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=months * 30)
 
-    for sym, path in manifest['symbols'].items():
-        if not os.path.exists(path):
-            logger.warning(f"  File not found: {path} — skipping {sym}")
+    seen_stems = set()
+    for csv_path in csv_files:
+        if csv_path.stem in seen_stems:
+            continue
+        seen_stems.add(csv_path.stem)
+
+        sym = stem_to_symbol(csv_path.stem)
+
+        try:
+            df = pd.read_csv(csv_path)
+        except Exception as e:
+            logger.warning(f"  Could not read {csv_path.name}: {e} — skipping")
             continue
 
-        df = pd.read_csv(path)
+        if 'timestamp' not in df.columns:
+            logger.warning(f"  {csv_path.name}: no 'timestamp' column — skipping")
+            continue
+
         df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
 
         # Filter to requested months
         df = df[df['timestamp'] >= cutoff].copy()
         df.reset_index(drop=True, inplace=True)
 
-        if len(df) < 1000:
-            logger.warning(f"  {sym}: only {len(df)} rows after filter — skipping")
+        if len(df) < 500:
+            logger.warning(f"  {sym}: only {len(df)} rows after {months}-month filter — skipping")
             continue
 
         df = _add_missing_features(df)
         dfs[sym] = df
-        logger.info(f"  {sym}: {len(df):,} rows loaded")
+        logger.info(f"  {sym}: {len(df):,} rows loaded from {csv_path.name}")
 
     if not dfs:
         logger.error("No data loaded. Run download_data.py first.")
