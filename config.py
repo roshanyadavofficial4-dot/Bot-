@@ -104,3 +104,24 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
 TELEGRAM_ADMIN_ID  = os.getenv("TELEGRAM_ADMIN_ID")
 TRADING_ENABLED    = True
+--- a/config.py
++++ b/config.py
+@@ -1,5 +1,20 @@
+ # === EXISTING CONFIG (top pe already hai) ===
+ 
++# === MICRO-CAP + STARVATION MODE (NEW) ===
++MICRO_SCALP_ENABLED       = True
++TRADE_STARVATION_HOURS    = 22          # 22 ghante bina trade → auto relax
++STARVATION_RELAX_FACTOR   = 0.82        # 18% looser thresholds
++
++MICRO_RISK_PCT            = 0.008       # 0.8% risk per micro-scalp
++MICRO_TARGET_RR           = 2.0
++MICRO_MAX_HOLD_MINUTES    = 30
++
++# Relaxed defaults for low-capital mode
++MIN_ADX_MICRO             = 18
++MIN_VOLUME_SPIKE_MICRO    = 1.10
++MIN_ABSORPTION_MICRO      = 0.25
++MAX_SPREAD_PCT_MICRO      = 0.0008      # 0.08%
++
+ # (baaki existing config jaise MAX_TRADES_PER_DAY etc. rahega)
